@@ -1,0 +1,172 @@
+{
+  "profile": {
+    "name": "Alex Kim",
+    "title": "Full Stack Developer",
+    "email": "alex@example.com",
+    "location": "Bay Area, CA",
+    "summary": "Passionate software developer with experience building modern web applications. I love creating elegant solutions to complex problems and continuously learning new technologies."
+  },
+  "items": [
+    {
+      "id": "leland",
+      "category": "education",
+      "title": "High School Diploma",
+      "organization": "Leland High School",
+      "location": "San Jose, CA",
+      "startDate": "2022-08",
+      "endDate": "2026-05",
+      "description": "",
+      "highlights": [
+        "National Merit Scholar Semifinalist",
+        "Dual Enrollment at SJCC & De Anza College"
+      ]
+    },
+    {
+      "id": "deanza",
+      "category": "education",
+      "title": "Computer Science Dual Enrollment",
+      "organization": "De Anza College",
+      "location": "Cupertino, CA",
+      "startDate": "2024-06",
+      "endDate": "2026-05",
+      "description": "Concurrent Enrollment while attending Leland High School.\nCIS 35A, CIS 22C, CIS 22A, CIS 22B",
+      "highlights": [
+        "Java",
+        "C++",
+        "Python",
+        "Data Abstraction & Structures"
+      ]
+    },
+    {
+      "id": "sjcc",
+      "category": "education",
+      "title": "Math Dual Enrollment",
+      "organization": "San Jose City College",
+      "location": "San Jose, CA",
+      "startDate": "2025-08",
+      "endDate": "2026-05",
+      "description": "Dual Enrollment while attending Leland High School.\nMATH 73, MATH 78",
+      "highlights": [
+        "Multivariable Calculus",
+        "Differential Equations"
+      ]
+    },
+    {
+      "id": "eyespy",
+      "category": "employment",
+      "title": "Data Science Intern",
+      "organization": "Eye Spy",
+      "location": "Remote",
+      "startDate": "2025-06",
+      "endDate": "2025-09",
+      "description": "Validated data for and built projects to benefit the low vision community.",
+      "highlights": [
+        "Expanded services to Arizona"
+      ]
+    },
+    {
+      "id": "gameplayus",
+      "category": "employment",
+      "title": "Data Science Intern",
+      "organization": "GamePlayUS",
+      "location": "San Francisco, CA",
+      "startDate": "2025-06",
+      "endDate": "2025-08",
+      "description": "Assisted data aggregation for youth sports platform.",
+      "highlights": [
+        "Built Chrome extension to improve organization workflow by 45%"
+      ]
+    },
+    {
+      "id": "trackflation",
+      "category": "project",
+      "title": "Project Trackflation: Track and Field Analysis",
+      "organization": "Personal",
+      "location": "Remote",
+      "startDate": "2025-04",
+      "endDate": "present",
+      "description": "Comparing the progression of high school athletes to professionals using data analysis and visualization.",
+      "highlights": []
+    },
+    {
+      "id": "athletichelper",
+      "category": "project",
+      "title": "Athletic Helper",
+      "organization": "Personal",
+      "location": "Remote",
+      "startDate": "2024-03",
+      "endDate": "present",
+      "description": "Real-time chat application with AI-powered features.",
+      "highlights": []
+    },
+    {
+      "id": "item-1767348333733",
+      "category": "project",
+      "title": "Notebook",
+      "organization": "Personal",
+      "location": "Remote",
+      "startDate": "2025-11",
+      "endDate": "present",
+      "description": "A notebook app written in Electron & React. Supports markdown, handwriting notes, Desmos, Mermaid, and Excalidraw. Contains a tool-calling assistant to manage, write, and research.",
+      "highlights": []
+    },
+    {
+      "id": "item-1767348458351",
+      "category": "project",
+      "title": "Multi-Canvas",
+      "organization": "Personal",
+      "location": "Remote",
+      "startDate": "2025-09",
+      "endDate": "present",
+      "description": "A Canvas LMS wrapper that allows students enrolled at multiple institutions to organize course materials, view files, and submit assignments in one place.",
+      "highlights": [
+        "Congressional App Challenge Recognition"
+      ]
+    },
+    {
+      "id": "item-1767348544355",
+      "category": "project",
+      "title": "Athleat",
+      "organization": "HackMIT",
+      "location": "MIT",
+      "startDate": "2025-3",
+      "endDate": "2025-3",
+      "description": "A web-app that uses OCR to read nutrition labels, tracks workouts, provides nutritious advice, and creates recipes to aid athletes",
+      "highlights": []
+    },
+    {
+      "id": "item-1767348691470",
+      "category": "project",
+      "title": "KLMS",
+      "organization": "Personal",
+      "location": "Remote",
+      "startDate": "2025-01",
+      "endDate": "2025-07",
+      "description": "An app that allows users to share notes and lessons on any topic in a markdown format.",
+      "highlights": []
+    },
+    {
+      "id": "item-1767348743069",
+      "category": "project",
+      "title": "Hobbscussion",
+      "organization": "Major League Hacking Hack Your Portfolio",
+      "location": "Remote",
+      "startDate": "2024-07",
+      "endDate": "2024-07",
+      "description": "Designed and created a mock social media app with a comprehensive user login system using React and Express.",
+      "highlights": []
+    }
+  ],
+  "skills": [
+    "JavaScript",
+    "TypeScript",
+    "React",
+    "Next.js",
+    "Node.js",
+    "Python",
+    "Java",
+    "C++",
+    "PostgreSQL",
+    "MongoDB"
+  ]
+}
