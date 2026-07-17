@@ -1,6 +1,13 @@
 "use client";
 
-import { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import {
+  useState,
+  useMemo,
+  useRef,
+  useEffect,
+  useCallback,
+  useLayoutEffect,
+} from "react";
 import resumeData from "@/data/resume.json";
 
 type ResumeItem = {
@@ -29,6 +36,28 @@ const categoryBorderColors: Record<string, string> = {
   certification: "border-orange-500",
 };
 
+// For SVG stroke colors, using hex values directly
+const categoryStrokeColors: Record<string, string> = {
+  education: "#3b82f6", // blue-500
+  employment: "#22c55e", // green-500
+  project: "#a855f7", // purple-500
+  certification: "#f97316", // orange-500
+};
+
+const categoryTextColors: Record<string, string> = {
+  education: "text-blue-500",
+  employment: "text-green-500",
+  project: "text-purple-500",
+  certification: "text-orange-500",
+};
+
+const categoryBgLight: Record<string, string> = {
+  education: "bg-blue-500/10",
+  employment: "bg-green-500/10",
+  project: "bg-purple-500/10",
+  certification: "bg-orange-500/10",
+};
+
 const categoryLabels: Record<string, string> = {
   education: "Education",
   employment: "Employment",
@@ -37,175 +66,231 @@ const categoryLabels: Record<string, string> = {
 };
 
 function parseDate(dateStr: string): Date {
-  if (dateStr === "present" || dateStr === "future") {
-    return new Date();
-  }
+  if (dateStr === "present" || dateStr === "future") return new Date();
   const [year, month] = dateStr.split("-").map(Number);
   return new Date(year, month - 1);
 }
 
-// Parse date for timeline bounds - includes future dates
 function parseDateForBounds(dateStr: string): Date {
-  if (dateStr === "present") {
-    return new Date();
-  }
+  if (dateStr === "present") return new Date();
   if (dateStr === "future") {
-    // Extend 6 months into the future for "future" items
-    const future = new Date();
-    future.setMonth(future.getMonth() + 6);
-    return future;
+    const f = new Date();
+    f.setMonth(f.getMonth() + 6);
+    return f;
   }
   const [year, month] = dateStr.split("-").map(Number);
   return new Date(year, month - 1);
 }
 
-// Check if a date extends into the future
 function isFutureDate(dateStr: string): boolean {
-  if (dateStr === "present") return false;
-  if (dateStr === "future") return true;
-  const date = parseDateForBounds(dateStr);
-  return date > new Date();
-}
-
-function getMonthsDuration(startDate: string, endDate: string): number {
-  const start = parseDate(startDate);
-  const end = parseDateForBounds(endDate);
-  const months =
-    (end.getFullYear() - start.getFullYear()) * 12 +
-    (end.getMonth() - start.getMonth());
-  return Math.max(1, months);
+  if (dateStr === "present" || dateStr === "future") return false;
+  return parseDateForBounds(dateStr) > new Date();
 }
 
 function formatDateRange(startDate: string, endDate: string): string {
-  const formatDate = (dateStr: string) => {
-    if (dateStr === "present") return "Present";
-    if (dateStr === "future") return "Ongoing";
-    const date = parseDateForBounds(dateStr);
-    const formatted = date.toLocaleDateString("en-US", {
+  const fmt = (d: string) => {
+    if (d === "present") return "Present";
+    if (d === "future") return "Ongoing";
+    const date = parseDateForBounds(d);
+    const s = date.toLocaleDateString("en-US", {
       month: "short",
       year: "numeric",
     });
-    // Add indicator if date is in the future
-    if (isFutureDate(dateStr)) {
-      return `${formatted} (Expected)`;
-    }
-    return formatted;
+    return isFutureDate(d) ? `${s} (Expected)` : s;
   };
-  return `${formatDate(startDate)} - ${formatDate(endDate)}`;
+  return `${fmt(startDate)} — ${fmt(endDate)}`;
 }
 
-const DEFAULT_PIXELS_PER_MONTH = 16; // Default scale: 16 pixels per month
-const MIN_ITEM_HEIGHT = 60; // Minimum height in pixels
+function dateKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
 
-type ZoomZone = {
-  startYear: number;
-  endYear: number;
-  multiplier: number; // Scale multiplier for this zone (e.g., 2 = 2x zoom)
+type TimeInterval = {
+  start: Date;
+  end: Date;
+  startLabel: string;
+  endLabel: string;
+  items: ResumeItem[];
+  key: string;
 };
 
-type ItemLayout = {
-  column: number;
-  localColumnCount: number; // How many columns are active at this item's position
-  localColumnOffset: number; // The adjusted column index for centering
-};
-
-// Assign items to columns and calculate local column counts for centering
-function assignColumnsWithLayout(
+/**
+ * Creates coarse-grained intervals for the timeline, merging granular time periods
+ * to ensure that no single timeline section is too cluttered.
+ * @param items The resume items to display.
+ * @param maxItemsPerSection The maximum number of unique items to show in one section.
+ * @returns An array of TimeInterval objects representing the sections.
+ */
+function computeIntervals(
   items: ResumeItem[],
-  minDate: Date,
-  minVisualMonths: number
-): Map<string, ItemLayout> {
-  const layouts = new Map<string, ItemLayout>();
-  // Track the visual end position (in months from minDate) for each column
-  const columnVisualEnds: number[] = [];
-  
-  // Store each item's visual bounds for later overlap calculation
-  const itemBounds: { id: string; start: number; end: number; column: number }[] = [];
+  maxItemsPerSection: number = 6,
+): TimeInterval[] {
+  const granularIntervals = computeGranularIntervals(items);
+  if (granularIntervals.length <= 1) {
+    return granularIntervals;
+  }
 
-  // Sort items by start date (earliest first)
-  const sortedItems = [...items].sort(
-    (a, b) => parseDate(a.startDate).getTime() - parseDate(b.startDate).getTime()
+  const mergedIntervals: TimeInterval[] = [];
+  let currentMergeGroup: TimeInterval[] = [];
+
+  for (const granular of granularIntervals) {
+    const tempGroup = [...currentMergeGroup, granular];
+    const uniqueItemIds = new Set(
+      tempGroup.flatMap((g) => g.items.map((item) => item.id)),
+    );
+
+    if (
+      uniqueItemIds.size > maxItemsPerSection &&
+      currentMergeGroup.length > 0
+    ) {
+      // Finalize the previous group because adding the next granular interval would exceed the limit
+      const first = currentMergeGroup[0];
+      const last = currentMergeGroup[currentMergeGroup.length - 1];
+      const allItemIds = new Set(
+        currentMergeGroup.flatMap((g) => g.items.map((item) => item.id)),
+      );
+      const allItems = items.filter((item) => allItemIds.has(item.id));
+
+      mergedIntervals.push({
+        start: first.start,
+        end: last.end,
+        startLabel: first.startLabel,
+        endLabel: last.endLabel,
+        items: allItems,
+        key: `${dateKey(first.start)}-${dateKey(last.end)}`,
+      });
+
+      currentMergeGroup = [granular]; // Start a new group
+    } else {
+      currentMergeGroup.push(granular); // Add to the current group
+    }
+  }
+
+  // Finalize the last remaining group
+  if (currentMergeGroup.length > 0) {
+    const first = currentMergeGroup[0];
+    const last = currentMergeGroup[currentMergeGroup.length - 1];
+    const allItemIds = new Set(
+      currentMergeGroup.flatMap((g) => g.items.map((item) => item.id)),
+    );
+    const allItems = items.filter((item) => allItemIds.has(item.id));
+
+    mergedIntervals.push({
+      start: first.start,
+      end: last.end,
+      startLabel: first.startLabel,
+      endLabel: last.endLabel,
+      items: allItems,
+      key: `${dateKey(first.start)}-${dateKey(last.end)}`,
+    });
+  }
+
+  return mergedIntervals;
+}
+
+/**
+ * Creates fine-grained intervals based on every unique start and end date.
+ * This forms the basis for the intelligent merging in `computeIntervals`.
+ */
+function computeGranularIntervals(items: ResumeItem[]): TimeInterval[] {
+  if (items.length === 0) return [];
+
+  const dateSet = new Map<string, Date>();
+  for (const item of items) {
+    const s = parseDate(item.startDate);
+    const e = parseDateForBounds(item.endDate);
+    const sk = dateKey(s);
+    const ek = dateKey(e);
+    if (!dateSet.has(sk)) dateSet.set(sk, s);
+    if (!dateSet.has(ek)) dateSet.set(ek, e);
+  }
+
+  const sortedDates = Array.from(dateSet.values()).sort(
+    (a, b) => a.getTime() - b.getTime(),
   );
 
-  // First pass: assign columns
-  for (const item of sortedItems) {
-    const itemStart = parseDate(item.startDate);
-    const itemStartMonths =
-      (itemStart.getFullYear() - minDate.getFullYear()) * 12 +
-      (itemStart.getMonth() - minDate.getMonth());
-    
-    // Calculate the visual end position (accounting for minimum height)
-    const actualDuration = getMonthsDuration(item.startDate, item.endDate);
-    const visualDuration = Math.max(minVisualMonths, actualDuration);
-    const itemVisualEnd = itemStartMonths + visualDuration;
+  const intervals: TimeInterval[] = [];
 
-    // Find first available column (where the item doesn't visually overlap)
-    let assignedColumn = -1;
-    for (let col = 0; col < columnVisualEnds.length; col++) {
-      if (columnVisualEnds[col] <= itemStartMonths) {
-        assignedColumn = col;
-        break;
-      }
-    }
+  for (let i = 0; i < sortedDates.length - 1; i++) {
+    const start = sortedDates[i];
+    const end = sortedDates[i + 1];
 
-    // If no column available, create a new one
-    if (assignedColumn === -1) {
-      assignedColumn = columnVisualEnds.length;
-      columnVisualEnds.push(0);
-    }
-
-    // Update the column's visual end position
-    columnVisualEnds[assignedColumn] = itemVisualEnd;
-    
-    itemBounds.push({
-      id: item.id,
-      start: itemStartMonths,
-      end: itemVisualEnd,
-      column: assignedColumn,
+    const active = items.filter((item) => {
+      const itemStart = parseDate(item.startDate);
+      const itemEnd = parseDateForBounds(item.endDate);
+      return itemStart < end && itemEnd > start;
     });
+
+    if (active.length > 0) {
+      intervals.push({
+        start,
+        end,
+        startLabel: start.toLocaleDateString("en-US", {
+          month: "short",
+          year: "numeric",
+        }),
+        endLabel: end.toLocaleDateString("en-US", {
+          month: "short",
+          year: "numeric",
+        }),
+        items: active,
+        key: `${dateKey(start)}-${dateKey(end)}`,
+      });
+    }
   }
 
-  const totalColumns = columnVisualEnds.length;
-
-  // Second pass: calculate local column counts for each item
-  for (const item of itemBounds) {
-    // Find all items that overlap with this item's time range
-    const overlappingItems = itemBounds.filter(
-      (other) => other.start < item.end && other.end > item.start
-    );
-    
-    // Get unique columns used by overlapping items
-    const usedColumns = new Set(overlappingItems.map((i) => i.column));
-    const localColumnCount = usedColumns.size;
-    
-    // Sort used columns to find this item's position within the local group
-    const sortedColumns = Array.from(usedColumns).sort((a, b) => a - b);
-    const localColumnOffset = sortedColumns.indexOf(item.column);
-    
-    layouts.set(item.id, {
-      column: item.column,
-      localColumnCount,
-      localColumnOffset,
+  if (sortedDates.length > 0) {
+    const lastDate = sortedDates[sortedDates.length - 1];
+    const activeAtEnd = items.filter((item) => {
+      const itemEnd = parseDateForBounds(item.endDate);
+      return itemEnd >= lastDate;
     });
+    if (activeAtEnd.length > 0) {
+      intervals.push({
+        start: lastDate,
+        end: new Date(lastDate.getFullYear() + 1, lastDate.getMonth(), 1),
+        startLabel: lastDate.toLocaleDateString("en-US", {
+          month: "short",
+          year: "numeric",
+        }),
+        endLabel: "Now",
+        items: activeAtEnd,
+        key: `${dateKey(lastDate)}-end`,
+      });
+    }
   }
 
-  return layouts;
+  return intervals;
 }
+
+// Constants for sticky positioning.
+// Navbar height is approx. 60px (from Navbar.tsx: py-4 + text-xl line-height).
+const NAVBAR_HEIGHT = 60;
+// Filter bar height is approx. 65px (py-4 + button height + border).
+const FILTER_BAR_HEIGHT = 65;
+// Total offset for sticky timeline sections.
+const TIMELINE_HEADER_OFFSET = NAVBAR_HEIGHT + FILTER_BAR_HEIGHT;
 
 export default function Timeline() {
   const [activeFilters, setActiveFilters] = useState<Set<string>>(
-    new Set(["education", "employment", "project", "certification"])
+    new Set(["education", "employment", "project", "certification"]),
   );
   const [isCondensed, setIsCondensed] = useState(false);
-  const [isReversed, setIsReversed] = useState(false);
-  const [pixelsPerMonth, setPixelsPerMonth] = useState(DEFAULT_PIXELS_PER_MONTH);
-  const [zoomZones, setZoomZones] = useState<ZoomZone[]>([]);
-  const [isAddingZone, setIsAddingZone] = useState(false);
-  const [newZoneStart, setNewZoneStart] = useState<number>(2024);
-  const [newZoneEnd, setNewZoneEnd] = useState<number>(2026);
-  const [newZoneMultiplier, setNewZoneMultiplier] = useState<number>(2);
+  const [scrollProgress, setScrollProgress] = useState(0);
+  const [fontSize, setFontSize] = useState<number | undefined>();
 
-  const minVisualMonths = MIN_ITEM_HEIGHT / pixelsPerMonth;
+  // Ref declarations
+  const containerRef = useRef<HTMLDivElement>(null);
+  const sectionContentRefs = useRef<(HTMLDivElement | null)[]>([]); // For dynamic font sizing
+  const itemRefs = useRef<Map<string, HTMLDivElement>>(new Map()); // For item position measurement
+  const [itemPositions, setItemPositions] = useState<Map<string, DOMRect>>(
+    new Map(),
+  ); // Stored item positions
+  const containerRectRef = useRef<DOMRect | null>(null); // Container rect captured alongside item positions
+
+  // Memoized calculations (order matters for dependencies)
+  // Categories for filter buttons
+  // Filtered items based on active filters
 
   const categories = useMemo(() => {
     const cats = new Set(resumeData.items.map((item) => item.category));
@@ -216,140 +301,210 @@ export default function Timeline() {
     return resumeData.items.filter((item) => activeFilters.has(item.category));
   }, [activeFilters]);
 
+  const intervals = useMemo(
+    () => computeIntervals(filteredItems),
+    [filteredItems],
+  );
+
+  // Continuity map for drawing connections between persisting items
+  const continuityMap = useMemo(() => {
+    const map = new Map<
+      number,
+      { prevIds: Set<string>; nextIds: Set<string> }
+    >();
+    for (let i = 0; i < intervals.length; i++) {
+      const prevIds =
+        i > 0
+          ? new Set<string>(intervals[i - 1].items.map((it) => it.id))
+          : new Set<string>();
+      const nextIds =
+        i < intervals.length - 1
+          ? new Set<string>(intervals[i + 1].items.map((it) => it.id))
+          : new Set<string>();
+      map.set(i, { prevIds, nextIds });
+    }
+    return map;
+  }, [intervals]);
+
+  useEffect(() => {
+    if (isCondensed || intervals.length === 0) return;
+
+    const calculateSize = () => {
+      let minRatio = 1;
+      const baseRem = parseFloat(
+        getComputedStyle(document.documentElement).fontSize,
+      );
+
+      sectionContentRefs.current.forEach((contentEl) => {
+        if (contentEl) {
+          const container = contentEl.parentElement;
+          if (container) {
+            contentEl.style.fontSize = "1rem"; // Reset for measurement
+            const contentHeight = contentEl.scrollHeight;
+            const containerHeight = contentEl.clientHeight; // Use clientHeight of the content div itself
+
+            if (contentHeight > containerHeight) {
+              const ratio = containerHeight / contentHeight;
+              if (ratio < minRatio) minRatio = ratio;
+            }
+          }
+        }
+      });
+
+      const newFontSize = Math.max(1 * minRatio, 12 / baseRem); // 1rem base, min 12px
+      setFontSize(newFontSize);
+    };
+
+    const handleResize = () => setTimeout(calculateSize, 150);
+    window.addEventListener("resize", handleResize);
+    handleResize(); // Initial calculation
+
+    return () => window.removeEventListener("resize", handleResize);
+  }, [intervals, isCondensed]);
+
+  // Effect to measure item positions (useLayoutEffect for synchronous DOM updates)
+  // This ensures itemPositions is updated right after DOM changes (like font size or interval changes)
+  useLayoutEffect(() => {
+    const newPositions = new Map<string, DOMRect>();
+    itemRefs.current.forEach((ref, id) => {
+      if (ref) {
+        newPositions.set(id, ref.getBoundingClientRect());
+      }
+    });
+    containerRectRef.current =
+      containerRef.current?.getBoundingClientRect() || null;
+    setItemPositions(newPositions);
+  }, [intervals, fontSize]); // Re-measure on interval change or font size change
+
   const toggleFilter = (category: string) => {
     const newFilters = new Set(activeFilters);
     if (newFilters.has(category)) {
-      if (newFilters.size > 1) {
-        newFilters.delete(category);
-      }
+      if (newFilters.size > 1) newFilters.delete(category);
     } else {
       newFilters.add(category);
     }
     setActiveFilters(newFilters);
   };
 
-  // Calculate timeline bounds (including future dates)
-  const { minDate, maxDate, totalMonths } = useMemo(() => {
-    if (filteredItems.length === 0) {
-      return { minDate: new Date(), maxDate: new Date(), totalMonths: 0 };
-    }
-    const startDates = filteredItems.map((item) => parseDate(item.startDate));
-    const endDates = filteredItems.map((item) => parseDateForBounds(item.endDate));
-    const allDates = [...startDates, ...endDates];
-    const min = new Date(Math.min(...allDates.map((d) => d.getTime())));
-    const max = new Date(Math.max(...allDates.map((d) => d.getTime())));
-    const months =
-      (max.getFullYear() - min.getFullYear()) * 12 +
-      (max.getMonth() - min.getMonth()) +
-      1;
-    return { minDate: min, maxDate: max, totalMonths: months };
-  }, [filteredItems]);
+  // Track scroll progress for the progress bar
+  useEffect(() => {
+    const handleScroll = () => {
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      // The scrollable distance of the timeline container
+      const total =
+        containerRef.current.scrollHeight -
+        window.innerHeight +
+        TIMELINE_HEADER_OFFSET;
+      const scrolled = -rect.top + TIMELINE_HEADER_OFFSET;
+      setScrollProgress(Math.max(0, Math.min(1, scrolled / total)));
 
-  // Assign columns for overlapping items with layout info for centering
-  const itemLayouts = useMemo(
-    () => assignColumnsWithLayout(filteredItems, minDate, minVisualMonths),
-    [filteredItems, minDate, minVisualMonths]
-  );
+      // Capture container rect at the same time as item positions to keep coordinate systems in sync
+      containerRectRef.current = rect;
 
-  const numColumns = useMemo(() => {
-    if (itemLayouts.size === 0) return 1;
-    return Math.max(...Array.from(itemLayouts.values()).map((l) => l.column)) + 1;
-  }, [itemLayouts]);
-
-  // Calculate the scale for a given month (accounting for zoom zones)
-  const getScaleForMonth = (monthIndex: number): number => {
-    const date = new Date(minDate.getFullYear(), minDate.getMonth() + monthIndex, 1);
-    const year = date.getFullYear();
-    
-    for (const zone of zoomZones) {
-      if (year >= zone.startYear && year <= zone.endYear) {
-        return pixelsPerMonth * zone.multiplier;
-      }
-    }
-    return pixelsPerMonth;
-  };
-
-  // Calculate total height with zoom zones
-  const totalHeight = useMemo(() => {
-    let height = 0;
-    for (let i = 0; i < totalMonths; i++) {
-      height += getScaleForMonth(i);
-    }
-    return height;
-  }, [totalMonths, pixelsPerMonth, zoomZones, minDate]);
-
-  // Calculate the pixel offset for a given month from the start
-  const getPixelOffsetForMonth = (monthIndex: number): number => {
-    let offset = 0;
-    for (let i = 0; i < monthIndex; i++) {
-      offset += getScaleForMonth(i);
-    }
-    return offset;
-  };
-
-  // Generate year markers for the scale
-  const yearMarkers = useMemo(() => {
-    const markers: { year: number; offset: number; isZoomed: boolean }[] = [];
-    const startYear = minDate.getFullYear();
-    const endYear = maxDate.getFullYear();
-
-    for (let year = startYear; year <= endYear; year++) {
-      const yearDate = new Date(year, 0, 1);
-      const monthsFromStart =
-        (yearDate.getFullYear() - minDate.getFullYear()) * 12 +
-        (yearDate.getMonth() - minDate.getMonth());
-      const normalOffset = getPixelOffsetForMonth(Math.max(0, monthsFromStart));
-      const isZoomed = zoomZones.some(z => year >= z.startYear && year <= z.endYear);
-      markers.push({
-        year,
-        offset: isReversed ? totalHeight - normalOffset : normalOffset,
-        isZoomed,
+      // Update item positions on scroll for accurate connection drawing
+      const newPositions = new Map<string, DOMRect>();
+      itemRefs.current.forEach((ref, id) => {
+        if (ref) {
+          newPositions.set(id, ref.getBoundingClientRect());
+        }
       });
-    }
-    return markers;
-  }, [minDate, maxDate, isReversed, totalHeight, zoomZones]);
-
-  // Calculate position and height for each item (with zoom zones)
-  const getItemStyle = (item: ResumeItem) => {
-    const start = parseDate(item.startDate);
-    const monthsFromStart =
-      (start.getFullYear() - minDate.getFullYear()) * 12 +
-      (start.getMonth() - minDate.getMonth());
-    const duration = getMonthsDuration(item.startDate, item.endDate);
-    
-    // Calculate height by summing scale for each month the item spans
-    let height = 0;
-    for (let i = 0; i < duration; i++) {
-      height += getScaleForMonth(monthsFromStart + i);
-    }
-    height = Math.max(MIN_ITEM_HEIGHT, height);
-
-    const topOffset = getPixelOffsetForMonth(monthsFromStart);
-    
-    // If reversed, calculate position from the bottom
-    const top = isReversed ? totalHeight - topOffset - height : topOffset;
-
-    return {
-      top,
-      height,
+      setItemPositions(newPositions);
     };
-  };
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
 
-  const addZoomZone = () => {
-    if (newZoneStart <= newZoneEnd) {
-      setZoomZones([...zoomZones, { startYear: newZoneStart, endYear: newZoneEnd, multiplier: newZoneMultiplier }]);
-      setIsAddingZone(false);
+  const scrollToInterval = (index: number) => {
+    const sections = containerRef.current?.querySelectorAll("[data-pin]");
+    if (containerRef.current && sections?.[index]) {
+      const element = sections[index] as HTMLElement;
+      // Calculate the scroll position to align the top of the section
+      // just below the sticky header elements.
+      const offsetTop =
+        containerRef.current.offsetTop +
+        element.offsetTop -
+        TIMELINE_HEADER_OFFSET;
+      window.scrollTo({ top: offsetTop, behavior: "smooth" });
     }
   };
 
-  const removeZoomZone = (index: number) => {
-    setZoomZones(zoomZones.filter((_, i) => i !== index));
-  };
+  // Add a ref map for the <path> elements themselves
+  const pathRefs = useRef(new Map());
+
+  // Continuous rAF sync loop — measures + writes DOM directly, no React state/render in the hot path
+  useLayoutEffect(() => {
+    // @ts-ignore
+    let rafId; 
+
+    const syncPaths = () => {
+      const containerRect = containerRef.current?.getBoundingClientRect();
+      if (!containerRect) {
+        rafId = requestAnimationFrame(syncPaths);
+        return;
+      }
+
+      const updates = []; // batch: collect all reads first
+
+      intervals.forEach((currentInterval, i) => {
+        if (i === 0) return;
+        const { prevIds } = continuityMap.get(i) || { prevIds: new Set() };
+        currentInterval.items.forEach((currentItem) => {
+          if (!prevIds.has(currentItem.id)) return;
+          const currentItemKey = `${currentItem.id}-${i}`;
+          const prevItemKey = `${currentItem.id}-${i - 1}`;
+          const currentEl = itemRefs.current.get(currentItemKey);
+          const prevEl = itemRefs.current.get(prevItemKey);
+          const pathEl = pathRefs.current.get(currentItemKey);
+          if (!currentEl || !prevEl || !pathEl) return;
+
+          updates.push({
+            pathEl,
+            currentRect: currentEl.getBoundingClientRect(), // read
+            prevRect: prevEl.getBoundingClientRect(), // read
+          });
+        });
+      });
+
+      // write pass — no reads mixed in
+      const svgOffsetX = containerRect.left;
+      const svgOffsetY = containerRect.top;
+      updates.forEach(({ pathEl, currentRect, prevRect }) => {
+        const dotCenterXOffset = 5;
+        const dotCenterYOffset = 8 + 6 + 5;
+        const startX = prevRect.left + dotCenterXOffset - svgOffsetX;
+        const startY = prevRect.top + dotCenterYOffset - svgOffsetY;
+        const endX = currentRect.left + dotCenterXOffset - svgOffsetX;
+        const endY = currentRect.top + dotCenterYOffset - svgOffsetY;
+        const controlY1 = startY + (endY - startY) * 0.3;
+        const controlY2 = endY - (endY - startY) * 0.3;
+        pathEl.setAttribute(
+          "d",
+          `M ${startX} ${startY} C ${startX} ${controlY1}, ${endX} ${controlY2}, ${endX} ${endY}`,
+        );
+      });
+
+      rafId = requestAnimationFrame(syncPaths);
+    };
+
+    rafId = requestAnimationFrame(syncPaths);
+    return () => cancelAnimationFrame(rafId);
+  }, [intervals, continuityMap]); // only re-bind if the data itself changes, not on scroll
 
   return (
-    <div className="w-full">
+    <div
+      className="w-full"
+      style={
+        {
+          "--timeline-header-offset": `${TIMELINE_HEADER_OFFSET}px`,
+        } as React.CSSProperties
+      }
+    >
       {/* Filter Controls */}
-      <div className="sticky top-20 z-40 bg-white/90 dark:bg-zinc-900/90 backdrop-blur-md py-4 px-6 mb-8 border-b border-zinc-200 dark:border-zinc-800">
+      <div
+        className="sticky z-40 bg-white/90 dark:bg-zinc-900/90 backdrop-blur-md py-4 px-6 mb-0 border-b border-zinc-200 dark:border-zinc-800"
+        style={{ top: `${NAVBAR_HEIGHT}px` }}
+      >
         <div className="flex flex-wrap items-center gap-3">
           <span className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
             Filter:
@@ -367,27 +522,7 @@ export default function Timeline() {
               {categoryLabels[category]}
             </button>
           ))}
-          <div className="ml-auto flex gap-2">
-            <button
-              onClick={() => setIsReversed(!isReversed)}
-              className="px-4 py-1.5 rounded-full text-sm font-medium transition-all bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-300 dark:hover:bg-zinc-600 flex items-center gap-1.5"
-              title={isReversed ? "Show oldest first" : "Show newest first"}
-            >
-              <svg
-                className={`w-4 h-4 transition-transform ${isReversed ? "rotate-180" : ""}`}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M19 14l-7 7m0 0l-7-7m7 7V3"
-                />
-              </svg>
-              {isReversed ? "Newest First" : "Oldest First"}
-            </button>
+          <div className="ml-auto">
             <button
               onClick={() => setIsCondensed(!isCondensed)}
               className={`px-4 py-1.5 rounded-full text-sm font-medium transition-all ${
@@ -401,374 +536,254 @@ export default function Timeline() {
           </div>
         </div>
 
-        {/* Scale Controls */}
-        {!isCondensed && (
-          <div className="flex flex-wrap items-center gap-4 mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-700">
-            {/* Scale Adjustment */}
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-zinc-600 dark:text-zinc-400">Scale:</span>
-              <button
-                onClick={() => setPixelsPerMonth(Math.max(2, pixelsPerMonth - 2))}
-                className="w-8 h-8 rounded-full bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-300 dark:hover:bg-zinc-600 flex items-center justify-center text-lg font-bold"
-              >
-                −
-              </button>
-              <span className="text-sm text-zinc-600 dark:text-zinc-400 w-12 text-center">
-                {pixelsPerMonth}px/mo
-              </span>
-              <button
-                onClick={() => setPixelsPerMonth(Math.min(24, pixelsPerMonth + 2))}
-                className="w-8 h-8 rounded-full bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-300 dark:hover:bg-zinc-600 flex items-center justify-center text-lg font-bold"
-              >
-                +
-              </button>
-              <button
-                onClick={() => setPixelsPerMonth(DEFAULT_PIXELS_PER_MONTH)}
-                className="px-2 py-1 rounded text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-              >
-                Reset
-              </button>
-            </div>
-
-            {/* Zoom Zones */}
-            <div className="flex items-center gap-2 ml-auto">
-              <span className="text-sm font-medium text-zinc-600 dark:text-zinc-400">Zoom Zones:</span>
-              {zoomZones.map((zone, index) => (
-                <div
-                  key={index}
-                  className="flex items-center gap-1 px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 rounded-full text-xs"
-                >
-                  <span>{zone.startYear}-{zone.endYear} ({zone.multiplier}x)</span>
-                  <button
-                    onClick={() => removeZoomZone(index)}
-                    className="ml-1 hover:text-red-500"
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-              {!isAddingZone ? (
-                <button
-                  onClick={() => setIsAddingZone(true)}
-                  className="px-3 py-1 rounded-full text-sm bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-300 dark:hover:bg-zinc-600"
-                >
-                  + Add Zone
-                </button>
-              ) : (
-                <div className="flex items-center gap-2 bg-zinc-100 dark:bg-zinc-800 p-2 rounded-lg">
-                  <input
-                    type="number"
-                    value={newZoneStart}
-                    onChange={(e) => setNewZoneStart(parseInt(e.target.value) || 2020)}
-                    className="w-16 px-2 py-1 text-xs rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-700"
-                    placeholder="Start"
-                  />
-                  <span className="text-zinc-500">-</span>
-                  <input
-                    type="number"
-                    value={newZoneEnd}
-                    onChange={(e) => setNewZoneEnd(parseInt(e.target.value) || 2026)}
-                    className="w-16 px-2 py-1 text-xs rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-700"
-                    placeholder="End"
-                  />
-                  <select
-                    value={newZoneMultiplier}
-                    onChange={(e) => setNewZoneMultiplier(parseFloat(e.target.value))}
-                    className="px-2 py-1 text-xs rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-700"
-                  >
-                    <option value={1.5}>1.5x</option>
-                    <option value={2}>2x</option>
-                    <option value={3}>3x</option>
-                    <option value={4}>4x</option>
-                  </select>
-                  <button
-                    onClick={addZoomZone}
-                    className="px-2 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600"
-                  >
-                    Add
-                  </button>
-                  <button
-                    onClick={() => setIsAddingZone(false)}
-                    className="px-2 py-1 text-xs text-zinc-500 hover:text-zinc-700"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
+        {/* Global progress bar */}
+        <div
+          className="fixed left-0 right-0 z-50 h-0.5 bg-zinc-200/50 dark:bg-zinc-800/50"
+          style={{ top: `${NAVBAR_HEIGHT}px` }}
+        >
+          <div
+            className="h-full bg-gradient-to-r from-blue-500 via-purple-500 to-green-500 transition-[width] duration-150 ease-out"
+            style={{ width: `${scrollProgress * 100}%` }}
+          />
+        </div>
       </div>
 
-      {/* Timeline / Condensed View */}
       {isCondensed ? (
         <CondensedResume items={filteredItems} />
       ) : (
-        <div className="relative flex">
-          {/* Year Scale */}
-          <div
-            className="relative w-16 flex-shrink-0 border-r border-zinc-300 dark:border-zinc-700"
-            style={{ height: `${totalHeight}px` }}
-          >
-            {yearMarkers.map(({ year, offset, isZoomed }) => (
-              <div
-                key={year}
-                className="absolute left-0 right-0 flex items-center"
-                style={{ top: `${offset}px` }}
-              >
-                <span className={`text-xs font-medium pr-2 ${isZoomed ? "text-blue-500 dark:text-blue-400" : "text-zinc-500 dark:text-zinc-400"}`}>
-                  {year}
-                  {isZoomed && <span className="ml-0.5 text-[8px]">🔍</span>}
-                </span>
-                <div className={`flex-1 h-px ${isZoomed ? "bg-blue-300 dark:bg-blue-600" : "bg-zinc-300 dark:bg-zinc-600"}`} />
-              </div>
-            ))}
-            {/* Month ticks */}
-            {Array.from({ length: totalMonths }).map((_, i) => {
-              const monthDate = new Date(
-                minDate.getFullYear(),
-                minDate.getMonth() + i,
-                1
-              );
-              const isJanuary = monthDate.getMonth() === 0;
-              if (isJanuary) return null; // Already have year marker
-              const offset = getPixelOffsetForMonth(i);
-              const isZoomed = zoomZones.some(z => monthDate.getFullYear() >= z.startYear && monthDate.getFullYear() <= z.endYear);
+        <div ref={containerRef} className="relative">
+          {/* Progress dots (right side) */}
+          <div className="fixed right-4 md:right-6 top-1/2 -translate-y-1/2 z-50 hidden lg:flex flex-col items-center gap-1">
+            {intervals.map((interval, i) => {
+              const sectionElement = containerRef.current?.querySelectorAll(
+                "[data-pin]",
+              )[i] as HTMLElement;
+              // Calculate the progress value that corresponds to the start of this section
+              const totalScrollHeight = containerRef.current
+                ? containerRef.current.scrollHeight -
+                  window.innerHeight +
+                  TIMELINE_HEADER_OFFSET
+                : 0;
+              const sectionStart = sectionElement
+                ? sectionElement.offsetTop
+                : 0;
+              const progress =
+                totalScrollHeight > 0 ? sectionStart / totalScrollHeight : 0;
+              const dist = Math.abs(scrollProgress - progress);
+              const isActive = dist < 0.15;
               return (
-                <div
-                  key={i}
-                  className={`absolute right-0 w-2 h-px ${isZoomed ? "bg-blue-200 dark:bg-blue-700" : "bg-zinc-200 dark:bg-zinc-700"}`}
-                  style={{ top: `${offset}px` }}
-                />
+                <button
+                  key={interval.key}
+                  onClick={() => scrollToInterval(i)}
+                  className="group flex items-center gap-2 py-0.5"
+                  title={`${interval.startLabel} — ${interval.endLabel}`}
+                >
+                  <span
+                    className={`text-[10px] font-mono whitespace-nowrap transition-all duration-300 ${
+                      isActive
+                        ? "opacity-100 text-zinc-900 dark:text-white"
+                        : "opacity-0 group-hover:opacity-70 text-zinc-500 dark:text-zinc-400"
+                    }`}
+                  >
+                    {interval.startLabel}
+                  </span>
+                  <div
+                    className={`w-2 h-2 rounded-full transition-all duration-300 ${
+                      isActive
+                        ? `${categoryColors[interval.items[0]?.category]} scale-150 shadow-lg`
+                        : "bg-zinc-300 dark:bg-zinc-600"
+                    }`}
+                  />
+                </button>
               );
             })}
           </div>
 
-          {/* Timeline Columns */}
-          <div
-            className="relative flex-1 ml-4"
-            style={{ height: `${totalHeight}px` }}
-          >
-            {/* Horizontal year lines */}
-            {yearMarkers.map(({ year, offset }) => (
-              <div
-                key={year}
-                className="absolute left-0 right-0 h-px bg-zinc-200 dark:bg-zinc-700"
-                style={{ top: `${offset}px` }}
-              />
-            ))}
+          {/* Connection SVG layer — paths are created once per persisting item, then mutated directly each frame */}
+          <svg className="absolute inset-0 w-full h-full pointer-events-none z-10">
+            {intervals.map((currentInterval, i) => {
+              if (i === 0) return null;
+              const { prevIds } = continuityMap.get(i) || {
+                prevIds: new Set(),
+              };
 
-            {/* Timeline items */}
-            {filteredItems.map((item) => {
-              const layout = itemLayouts.get(item.id) || { column: 0, localColumnCount: 1, localColumnOffset: 0 };
-              const { top, height } = getItemStyle(item);
-              
-              // Calculate width and position based on local column count (items overlapping at this position)
-              const columnWidthPercent = Math.min(100 / numColumns, 50); // Cap at 50% width per item
-              const localTotalWidth = columnWidthPercent * layout.localColumnCount;
-              const centerOffset = (100 - localTotalWidth) / 2;
-              const leftPosition = centerOffset + layout.localColumnOffset * columnWidthPercent;
+              return currentInterval.items.map((currentItem) => {
+                if (!prevIds.has(currentItem.id)) return null;
+                const currentItemKey = `${currentItem.id}-${i}`;
 
-              return (
-                <div
-                  key={item.id}
-                  className="absolute px-1"
+                return (
+                  <path
+                    key={`${currentItem.id}-connection-${i}`}
+                    ref={(el) => {
+                      if (el) pathRefs.current.set(currentItemKey, el);
+                      else pathRefs.current.delete(currentItemKey);
+                    }}
+                    d="" // written every frame by the rAF loop above
+                    stroke={categoryStrokeColors[currentItem.category]}
+                    strokeWidth="2"
+                    fill="none"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                );
+              });
+            })}
+          </svg>
+
+          {/* Sticky pin sections */}
+          {intervals.map((interval, sectionIndex) => {
+            return (
+              <div key={interval.key} data-pin className="h-[175vh]">
+                <section
+                  className="sticky w-full h-[calc(100vh-var(--timeline-header-offset))]"
                   style={{
-                    top: `${top}px`,
-                    height: `${height}px`,
-                    left: `${leftPosition}%`,
-                    width: `${columnWidthPercent}%`,
+                    zIndex: sectionIndex + 1,
+                    top: "var(--timeline-header-offset)",
                   }}
                 >
-                  <TimelineCard item={item} height={height} />
-                </div>
-              );
-            })}
-          </div>
+                  {/* Solid background to cover previous pinned section */}
+                  <div className="absolute inset-0 bg-zinc-50 dark:bg-zinc-950" />
+
+                  {/* Subtle category gradient overlay */}
+                  <div className="absolute inset-0 pointer-events-none">
+                    {(() => {
+                      const dominant = interval.items[0]?.category;
+                      const gradients: Record<string, string> = {
+                        education:
+                          "from-blue-500/[0.03] via-transparent to-blue-500/[0.01]",
+                        employment:
+                          "from-green-500/[0.03] via-transparent to-green-500/[0.01]",
+                        project:
+                          "from-purple-500/[0.03] via-transparent to-purple-500/[0.01]",
+                        certification:
+                          "from-orange-500/[0.03] via-transparent to-orange-500/[0.01]",
+                      };
+                      return (
+                        <div
+                          className={`absolute inset-0 bg-gradient-to-br ${
+                            gradients[dominant] || gradients.project
+                          }`}
+                        />
+                      );
+                    })()}
+                  </div>
+
+                  {/* Content wrapper */}
+                  <div className="relative flex h-full">
+                    {/* Main content area */}
+                    <div className="w-full h-full p-6 md:p-12">
+                      <div
+                        className="w-full mx-auto"
+                        ref={(el) =>
+                          (sectionContentRefs.current[sectionIndex] = el)
+                        }
+                        style={{
+                          fontSize: fontSize ? `${fontSize}rem` : undefined,
+                        }}
+                      >
+                        {/* Mobile date header (shown on small screens) */}
+                        <div className="md:hidden mb-8">
+                          <span className="text-4xl font-bold text-zinc-200 dark:text-zinc-800 leading-none select-none">
+                            {interval.start.getFullYear()}
+                          </span>
+                          <p className="text-xs text-zinc-400 dark:text-zinc-500 uppercase tracking-widest mt-1">
+                            {interval.startLabel} — {interval.endLabel}
+                          </p>
+                          <div className="h-px bg-gradient-to-r from-zinc-300 dark:from-zinc-700 to-transparent mt-4" />
+                        </div>
+
+                        {/* Desktop date header */}
+                        <div className="hidden md:block mb-10">
+                          <div className="flex items-baseline gap-4">
+                            <span className="text-sm font-medium text-zinc-400 dark:text-zinc-500 uppercase tracking-widest">
+                              {interval.startLabel}
+                            </span>
+                            <div className="flex-1 h-px bg-zinc-200 dark:bg-zinc-800" />
+                            <span className="text-sm font-medium text-zinc-400 dark:text-zinc-500 uppercase tracking-widest">
+                              {interval.endLabel}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Items grid */}
+                        <div className="grid portrait:grid-cols-1 portrait:grid-flow-row landscape:grid-flow-col lg:landscape:grid-flow-col gap-4">
+                          {interval.items.map((item) => (
+                            <TimelineItemEntry
+                              key={item.id}
+                              item={item}
+                              itemRef={(el) => {
+                                const key = `${item.id}-${sectionIndex}`;
+                                if (el) itemRefs.current.set(key, el);
+                                else itemRefs.current.delete(key);
+                              }}
+                            />
+                          ))}
+                        </div>
+
+                        {/* Section counter */}
+                        <div className="mt-12 text-center">
+                          <span className="text-xs font-mono text-zinc-300 dark:text-zinc-700">
+                            {String(sectionIndex + 1).padStart(2, "0")} /{" "}
+                            {String(intervals.length).padStart(2, "0")}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
   );
 }
 
-function TimelineCard({ item, height }: { item: ResumeItem; height: number }) {
-  const [isHovered, setIsHovered] = useState(false);
-  const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({});
-  const cardRef = useRef<HTMLDivElement>(null);
-  const popupRef = useRef<HTMLDivElement>(null);
+function TimelineItemEntry({
+  item,
+  itemRef,
+}: {
+  item: ResumeItem;
+  itemRef: React.Ref<HTMLDivElement>;
+}) {
   const hasFutureEnd = isFutureDate(item.endDate) || item.endDate === "future";
 
-  // Height thresholds for showing different elements (in pixels)
-  // Priority: title > organization > date range > category label > description > highlights
-  const showCategory = isHovered || height >= 40;
-  const showTitle = true; // Always show title
-  const showOrganization = isHovered || height >= 55;
-  const showDateRange = isHovered || height >= 75;
-  const showDescription = isHovered || height >= 120;
-  const showHighlights = isHovered || height >= 150;
-
-  // Calculate popup position to keep it within viewport
-  const calculatePopupPosition = useCallback(() => {
-    if (!cardRef.current || !popupRef.current || !isHovered) return;
-
-    const cardRect = cardRef.current.getBoundingClientRect();
-    const popupRect = popupRef.current.getBoundingClientRect();
-    const viewportHeight = window.innerHeight;
-    const viewportWidth = window.innerWidth;
-    const padding = 10; // Padding from viewport edges
-
-    const newStyle: React.CSSProperties = {};
-
-    // Check if popup extends below viewport
-    if (popupRect.bottom > viewportHeight - padding) {
-      const overflow = popupRect.bottom - (viewportHeight - padding);
-      // First try moving it up
-      if (cardRect.top - overflow > padding) {
-        newStyle.transform = `translateY(-${overflow}px) scale(1.02)`;
-      } else {
-        // If can't move up enough, limit max height and allow scroll
-        const maxHeight = viewportHeight - padding * 2 - 20;
-        newStyle.maxHeight = `${maxHeight}px`;
-        newStyle.overflowY = "auto";
-      }
-    }
-
-    // Check if popup extends above viewport
-    if (cardRect.top < padding) {
-      const overflow = padding - cardRect.top;
-      newStyle.transform = `translateY(${overflow}px) scale(1.02)`;
-    }
-
-    // Check horizontal overflow (right side)
-    if (popupRect.right > viewportWidth - padding) {
-      const overflow = popupRect.right - (viewportWidth - padding);
-      newStyle.marginLeft = `-${overflow}px`;
-    }
-
-    // Check horizontal overflow (left side)
-    if (popupRect.left < padding) {
-      const overflow = padding - popupRect.left;
-      newStyle.marginLeft = `${overflow}px`;
-    }
-
-    setPopupStyle(newStyle);
-  }, [isHovered]);
-
-  useEffect(() => {
-    if (isHovered) {
-      // Small delay to let the popup render first
-      const timer = setTimeout(calculatePopupPosition, 50);
-      return () => clearTimeout(timer);
-    } else {
-      setPopupStyle({});
-    }
-  }, [isHovered, calculatePopupPosition]);
-
   return (
-    <div ref={cardRef} className="relative h-full">
-      {/* Original card (non-hovered state) */}
-      <div
-        className={`h-full bg-white dark:bg-zinc-800 rounded-lg border-l-4 ${categoryBorderColors[item.category]} border border-zinc-200 dark:border-zinc-700 ${hasFutureEnd ? "border-dashed" : ""} transition-all duration-300 ease-out shadow-sm hover:shadow-md`}
-        onMouseEnter={() => setIsHovered(true)}
-      >
-        <div className="p-3 flex flex-col overflow-hidden h-full">
-          <div 
-            className={`flex items-center gap-1.5 mb-1 overflow-hidden flex-shrink-0 transition-all duration-300 ease-out ${showCategory && !isHovered ? "opacity-100 max-h-6" : "opacity-0 max-h-0 mb-0"}`}
-          >
-            <span
-              className={`inline-block w-2 h-2 rounded-full flex-shrink-0 ${categoryColors[item.category]}`}
-            />
-            <span className="text-[10px] font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wide overflow-hidden whitespace-nowrap">
-              {categoryLabels[item.category]}
-              {hasFutureEnd && " • Ongoing"}
-            </span>
-          </div>
-          {showTitle && (
-            <h3 
-              className="text-sm font-semibold text-zinc-900 dark:text-white leading-tight flex-shrink-0 line-clamp-1 break-words"
-            >
-              {item.title}
-            </h3>
-          )}
-          <p 
-            className={`text-xs text-zinc-600 dark:text-zinc-300 flex-shrink-0 transition-all duration-300 ease-out line-clamp-1 break-words ${showOrganization && !isHovered ? "opacity-100 max-h-10" : "opacity-0 max-h-0 overflow-hidden"}`}
-          >
+    <div ref={itemRef} className="relative py-2">
+      <div className="flex items-start gap-4">
+        <span
+          className={`mt-1.5 w-2.5 h-2.5 rounded-full flex-shrink-0 ${
+            categoryColors[item.category]
+          }`}
+        />
+        <div className="flex-1">
+          <h3 className="font-semibold text-zinc-900 dark:text-white leading-snug">
+            {item.title}
+          </h3>
+          <p className="font-medium text-zinc-700 dark:text-zinc-400">
             {item.organization}
           </p>
-          <p 
-            className={`text-[10px] text-zinc-500 dark:text-zinc-400 mt-1 overflow-hidden whitespace-nowrap flex-shrink-0 transition-all duration-300 ease-out ${showDateRange && !isHovered ? "opacity-100 max-h-6" : "opacity-0 max-h-0 mt-0"}`}
-          >
-            {formatDateRange(item.startDate, item.endDate)}
+          <p className="text-zinc-500 dark:text-zinc-400 mt-1">
+            {item.location} · {formatDateRange(item.startDate, item.endDate)}
           </p>
           {item.description && (
-            <p 
-              className={`text-xs text-zinc-600 dark:text-zinc-400 mt-2 flex-grow transition-all duration-300 ease-out line-clamp-2 break-words ${showDescription && !isHovered ? "opacity-100" : "opacity-0 max-h-0 mt-0 overflow-hidden"}`}
-            >
+            <p className="text-zinc-600 dark:text-zinc-400 mt-2">
               {item.description}
             </p>
           )}
           {item.highlights.length > 0 && (
-            <ul 
-              className={`text-xs text-zinc-500 dark:text-zinc-400 mt-2 space-y-0.5 overflow-hidden transition-all duration-300 ease-out ${showHighlights && !isHovered ? "opacity-100" : "opacity-0 max-h-0 mt-0"}`}
-            >
-              {item.highlights.slice(0, Math.floor((height - 120) / 20)).map((highlight, i) => (
-                <li key={i} className="line-clamp-1 break-words">
-                  • {highlight}
+            <ul className="mt-2 space-y-1 text-zinc-600 dark:text-zinc-400">
+              {item.highlights.map((h, i) => (
+                <li key={i} className="flex items-start gap-2">
+                  <span className="text-zinc-400 dark:text-zinc-500">·</span>
+                  <span>{h}</span>
                 </li>
               ))}
             </ul>
           )}
         </div>
       </div>
-
-      {/* Hover popup - positioned to stay within viewport */}
-      {isHovered && (
-        <div
-          ref={popupRef}
-          className={`absolute left-0 right-0 bg-white dark:bg-zinc-800 rounded-lg border-l-4 ${categoryBorderColors[item.category]} border border-zinc-200 dark:border-zinc-700 ${hasFutureEnd ? "border-dashed" : ""} shadow-2xl z-50 ring-2 ring-blue-400/50 transition-all duration-300 ease-out`}
-          style={{
-            top: 0,
-            minHeight: `${height}px`,
-            transform: popupStyle.transform || "scale(1.02)",
-            transformOrigin: "center top",
-            ...popupStyle,
-          }}
-          onMouseLeave={() => setIsHovered(false)}
-        >
-          <div className="p-3 flex flex-col">
-            <div className="flex items-center gap-1.5 mb-1 flex-shrink-0">
-              <span
-                className={`inline-block w-2 h-2 rounded-full flex-shrink-0 ${categoryColors[item.category]}`}
-              />
-              <span className="text-[10px] font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
-                {categoryLabels[item.category]}
-                {hasFutureEnd && " • Ongoing"}
-              </span>
-            </div>
-            <h3 className="text-sm font-semibold text-zinc-900 dark:text-white leading-tight flex-shrink-0">
-              {item.title}
-            </h3>
-            <p className="text-xs text-zinc-600 dark:text-zinc-300 flex-shrink-0">
-              {item.organization}
-            </p>
-            <p className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-1 flex-shrink-0">
-              {formatDateRange(item.startDate, item.endDate)}
-            </p>
-            {item.description && (
-              <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-2 whitespace-pre-wrap">
-                {item.description}
-              </p>
-            )}
-            {item.highlights.length > 0 && (
-              <ul className="text-xs text-zinc-500 dark:text-zinc-400 mt-2 space-y-0.5">
-                {item.highlights.map((highlight, i) => (
-                  <li key={i}>• {highlight}</li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -777,9 +792,7 @@ function CondensedResume({ items }: { items: ResumeItem[] }) {
   const groupedItems = useMemo(() => {
     const groups: Record<string, ResumeItem[]> = {};
     items.forEach((item) => {
-      if (!groups[item.category]) {
-        groups[item.category] = [];
-      }
+      if (!groups[item.category]) groups[item.category] = [];
       groups[item.category].push(item);
     });
     return groups;
@@ -788,8 +801,7 @@ function CondensedResume({ items }: { items: ResumeItem[] }) {
   const categoryOrder = ["employment", "education", "project", "certification"];
 
   return (
-    <div className="bg-white dark:bg-zinc-800 rounded-xl shadow-sm border border-zinc-200 dark:border-zinc-700 p-8 max-w-3xl mx-auto">
-      {/* Header */}
+    <div className="bg-white dark:bg-zinc-800 rounded-xl shadow-sm border border-zinc-200 dark:border-zinc-700 p-8 max-w-3xl mx-auto my-12">
       <div className="text-center mb-8 pb-6 border-b border-zinc-200 dark:border-zinc-700">
         <h1 className="text-3xl font-bold text-zinc-900 dark:text-white mb-2">
           {resumeData.profile.name}
@@ -798,11 +810,10 @@ function CondensedResume({ items }: { items: ResumeItem[] }) {
           {resumeData.profile.title}
         </p>
         <p className="text-sm text-zinc-500 dark:text-zinc-400">
-          {resumeData.profile.email} • {resumeData.profile.location}
+          {resumeData.profile.email} · {resumeData.profile.location}
         </p>
       </div>
 
-      {/* Skills */}
       <div className="mb-8">
         <h2 className="text-lg font-semibold text-zinc-900 dark:text-white mb-3 flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-zinc-500" />
@@ -820,7 +831,6 @@ function CondensedResume({ items }: { items: ResumeItem[] }) {
         </div>
       </div>
 
-      {/* Sections */}
       {categoryOrder.map((category) => {
         const categoryItems = groupedItems[category];
         if (!categoryItems || categoryItems.length === 0) return null;
@@ -828,12 +838,17 @@ function CondensedResume({ items }: { items: ResumeItem[] }) {
         return (
           <div key={category} className="mb-8">
             <h2 className="text-lg font-semibold text-zinc-900 dark:text-white mb-4 flex items-center gap-2">
-              <span className={`w-2 h-2 rounded-full ${categoryColors[category]}`} />
+              <span
+                className={`w-2 h-2 rounded-full ${categoryColors[category]}`}
+              />
               {categoryLabels[category]}
             </h2>
             <div className="space-y-4">
               {categoryItems.map((item) => (
-                <div key={item.id} className="pl-4 border-l-2 border-zinc-200 dark:border-zinc-700">
+                <div
+                  key={item.id}
+                  className="pl-4 border-l-2 border-zinc-200 dark:border-zinc-700"
+                >
                   <div className="flex justify-between items-start mb-1">
                     <h3 className="font-medium text-zinc-900 dark:text-white">
                       {item.title}
@@ -843,11 +858,11 @@ function CondensedResume({ items }: { items: ResumeItem[] }) {
                     </span>
                   </div>
                   <p className="text-sm text-zinc-600 dark:text-zinc-300 mb-1">
-                    {item.organization} • {item.location}
+                    {item.organization} · {item.location}
                   </p>
                   <ul className="text-sm text-zinc-500 dark:text-zinc-400">
                     {item.highlights.map((highlight, i) => (
-                      <li key={i}>• {highlight}</li>
+                      <li key={i}>· {highlight}</li>
                     ))}
                   </ul>
                 </div>
