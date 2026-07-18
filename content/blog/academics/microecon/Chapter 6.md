@@ -2,7 +2,7 @@
 title: Chapter 6 - Supply, Demand, and Government Policies
 description: ""
 date: 7-16-2026
-tags: ["econ", "microecon"]
+tags: ["econ", "microecon", "de-anza"]
 ---
 # Supply, Demand, and Government Policies
 

@@ -2,7 +2,7 @@
 title: Chapter 4 - The Market Forces of Supply and Demand
 description: ""
 date: 7-15-2026
-tags: ["econ", "microecon"]
+tags: ["econ", "microecon", "de-anza"]
 ---
 # The Market Forces of Supply and Demand
 

@@ -2,7 +2,7 @@
 title: Chapter 2 - Thinking Like an Economist
 description: ""
 date: 7-14-2026
-tags: ["econ", "microecon"]
+tags: ["econ", "microecon", "de-anza"]
 ---
 # Thinking Like an Economist
 ### 2-1

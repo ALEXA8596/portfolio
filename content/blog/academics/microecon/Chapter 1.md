@@ -2,7 +2,7 @@
 title: "Chapter 1 - The Ten Principles of Economics"
 description: ""
 date: "7-14-2026"
-tags: ["econ", "microecon"]
+tags: ["econ", "microecon", "de-anza"]
 ---
 # The Ten Principles of Economics
 ### 1-1a. Principle 1: People Face Trade-Offs
