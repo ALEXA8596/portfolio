@@ -435,7 +435,7 @@ export default function Timeline() {
   // Continuous rAF sync loop — measures + writes DOM directly, no React state/render in the hot path
   useLayoutEffect(() => {
     // @ts-ignore
-    let rafId; 
+    let rafId: number;
 
     const syncPaths = () => {
       const containerRect = containerRef.current?.getBoundingClientRect();
@@ -444,7 +444,7 @@ export default function Timeline() {
         return;
       }
 
-      const updates = []; // batch: collect all reads first
+      const updates: { pathEl: SVGPathElement; currentRect: DOMRect; prevRect: DOMRect }[] = []; // batch: collect all reads first
 
       intervals.forEach((currentInterval, i) => {
         if (i === 0) return;
@@ -674,9 +674,9 @@ export default function Timeline() {
                     <div className="w-full h-full p-6 md:p-12">
                       <div
                         className="w-full mx-auto"
-                        ref={(el) =>
-                          (sectionContentRefs.current[sectionIndex] = el)
-                        }
+                        ref={(el) => {
+                          sectionContentRefs.current[sectionIndex] = el;
+                        }}
                         style={{
                           fontSize: fontSize ? `${fontSize}rem` : undefined,
                         }}
