@@ -25,11 +25,28 @@ export interface BlogPostMeta {
   category: string;
 }
 
-function findMarkdownFiles(
-  dir: string,
-  relativeTo: string
-): { slug: string; absolutePath: string }[] {
-  const results: { slug: string; absolutePath: string }[] = [];
+interface PostFile {
+  rawSlug: string;   // derived straight from filesystem path, may contain spaces/caps
+  slug: string;       // slugified, URL-safe version
+  absolutePath: string;
+}
+
+function slugifySegment(segment: string): string {
+  return segment
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "") // strip accents
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function slugifyPath(rawSlug: string): string {
+  return rawSlug.split("/").map(slugifySegment).join("/");
+}
+
+function findMarkdownFiles(dir: string, relativeTo: string): PostFile[] {
+  const results: PostFile[] = [];
   if (!fs.existsSync(dir)) return results;
 
   const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -38,12 +55,12 @@ function findMarkdownFiles(
     if (entry.isDirectory()) {
       results.push(...findMarkdownFiles(fullPath, relativeTo));
     } else if (entry.name.endsWith(".md")) {
-      const slug = path
+      const rawSlug = path
         .relative(relativeTo, fullPath)
         .replace(/\.md$/, "")
         .split(path.sep)
         .join("/");
-      results.push({ slug, absolutePath: fullPath });
+      results.push({ rawSlug, slug: slugifyPath(rawSlug), absolutePath: fullPath });
     }
   }
   return results;
@@ -79,23 +96,28 @@ export function getAllPosts(): BlogPostMeta[] {
 }
 
 export async function getPostBySlug(slug: string): Promise<BlogPost | null> {
-  const fullPath = path.join(postsDirectory, `${slug}.md`);
+  const files = findMarkdownFiles(postsDirectory, postsDirectory);
+  const match = files.find((f) => f.slug === slug);
+  if (!match) return null;
 
-  if (!fs.existsSync(fullPath)) return null;
-
-  const fileContents = fs.readFileSync(fullPath, "utf8");
+  const fileContents = fs.readFileSync(match.absolutePath, "utf8");
   const { data, content } = matter(fileContents);
 
-  const processedContent = await remark().use(html).process(content);
+  const cleanedContent = content
+    .replace(/!\[\[.*?\]\]/g, "")
+    .replace(/\[\[(.*?)\]\]/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+
+  const processedContent = await remark().use(html).process(cleanedContent);
   const contentHtml = processedContent.toString();
 
   return {
-    slug,
+    slug: match.slug,
     title: data.title || "",
     description: data.description || "",
     date: data.date || "",
     tags: data.tags || [],
-    category: slugToCategory(slug),
+    category: slugToCategory(match.slug),
     contentHtml,
   };
 }
